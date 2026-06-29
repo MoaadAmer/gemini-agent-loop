@@ -3,6 +3,7 @@ using Google.GenAI.Types;
 using Type = Google.GenAI.Types.Type;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Text.Json;
 
 public class AgentOrchestrator
 {
@@ -91,13 +92,12 @@ public class AgentOrchestrator
                 Temperature = 0.0f
             };
 
-            bool isRunning = true;
             int iteration = 0;
             int maxIterations = 5;
 
             _logger.LogInformation("User Question: 'Check what time it is right now, and then check the weather in Tokyo.'");
             _logger.LogInformation("\n--- Starting Agentic Loop ---");
-            while (isRunning && iteration < maxIterations)
+            while (iteration < maxIterations)
             {
                 iteration++;
                 _logger.LogInformation("\n[Iteration {iteration}] Sending history to Gemini...", iteration);
@@ -157,12 +157,66 @@ public class AgentOrchestrator
                 {
                     _logger.LogInformation("-> No more tool calls requested. Agent has reached its goal.");
                     _logger.LogInformation("\n--- Final Structured Output Reached (DOD Met) ---");
+                    _logger.LogInformation("\n--- Loop Completed ---");
 
-                    _logger.LogInformation(response.Text);
-                    isRunning = false;
+                    if (string.IsNullOrWhiteSpace(response.Text))
+                    {
+                        _logger.LogError("Model did not return valid JSON");
+                        return;
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var finalResponse = JsonSerializer.Deserialize<FinalAgentResponse>(
+                                response.Text,
+                                new JsonSerializerOptions
+                                {
+                                    PropertyNameCaseInsensitive = true,
+                                });
+
+                            if (finalResponse == null)
+                            {
+
+                                _logger.LogError("Deserialization returned null");
+                                return;
+                            }
+
+
+                            if (string.IsNullOrWhiteSpace(finalResponse.ExecutionSummary))
+                            {
+                                _logger.LogError("Missing execution_summary");
+                                return;
+                            }
+
+                            if (finalResponse.ToolsUsed == null)
+                            {
+                                _logger.LogError("Missing tools_used");
+                                return;
+                            }
+
+                            if (!response.Text.Contains("is_success"))
+                            {
+                                _logger.LogError("Missing is_success field");
+                                return;
+                            }
+
+                            _logger.LogInformation("Execution Summary: {summary}", finalResponse.ExecutionSummary);
+                            _logger.LogInformation("Tools Used: {tools}", string.Join(", ", finalResponse.ToolsUsed ?? []));
+                            _logger.LogInformation("Success: {success}", finalResponse.IsSuccess);
+
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError("JSON parsing failed: {error}", ex.Message);
+                            _logger.LogError("Raw response: {raw}", response.Text);
+                            return;
+                        }
+                    }
+                    return;
+
                 }
             }
-            _logger.LogInformation("\n--- Loop Completed ---");
 
 
         }
